@@ -24,22 +24,41 @@ public class RedisLock implements Lock {
     public static final int DEFAULT_EXPIRE_SECONDS = 30;
     private static final String LOCK_PREFIX = "__lock:";
 
+    private static final String id = UUID.randomUUID().toString();
+
     private final JedisCommands commands;
     private final String key;
+    private final String value;
     private final int expireSeconds;
-    private final String id = UUID.randomUUID().toString();
 
     private Lock localLock = new ReentrantLock();
 
+    private long minSleepMillis = 50;
+    private long maxSleepMillis = 150;
+
     public RedisLock(JedisCommands commands, String name, int expireSeconds) {
-        try {
-            this.commands = commands;
-            this.key = LOCK_PREFIX + new BigInteger(1,
-                    MessageDigest.getInstance("MD5").digest(name.getBytes())).toString(16);
-            this.expireSeconds = expireSeconds;
-        } catch (NoSuchAlgorithmException e) {
-            throw new ExceptionInInitializerError(e);
+        if (commands == null) {
+            throw new IllegalArgumentException();
         }
+        if (name == null || name.isEmpty()) {
+            throw new IllegalArgumentException();
+        }
+        if (expireSeconds <= 0) {
+            throw new IllegalArgumentException();
+        }
+
+        this.commands = commands;
+        this.key = LOCK_PREFIX + digestTextUsingMd5(name);
+        this.value = digestTextUsingMd5(key + id);
+        this.expireSeconds = expireSeconds;
+    }
+
+    public void setSleepMillis(long approximateSleepMillis) {
+        if (approximateSleepMillis <= 0) {
+            throw new IllegalArgumentException();
+        }
+        this.minSleepMillis = approximateSleepMillis >> 1;
+        this.maxSleepMillis = approximateSleepMillis + (approximateSleepMillis >> 1);
     }
 
     @Override
@@ -91,8 +110,8 @@ public class RedisLock implements Lock {
         boolean interrupted = false;
         try {
             while ((unit == null || time > 0) && !(interrupted = Thread.interrupted()) &&
-                    !(locked = Objects.equals("OK", commands.set(key, id, "NX", "EX", expireSeconds)))) {
-                long sleepMillis = ThreadLocalRandom.current().nextLong(100, 500);
+                    !(locked = Objects.equals("OK", commands.set(key, value, "NX", "EX", expireSeconds)))) {
+                long sleepMillis = ThreadLocalRandom.current().nextLong(minSleepMillis, maxSleepMillis);
                 if (unit == null) {
                     Thread.sleep(sleepMillis);
                 } else {
@@ -120,7 +139,7 @@ public class RedisLock implements Lock {
             try {
                 String script = "if (redis.call('get', KEYS[1]) == ARGV[1]) then " +
                         "redis.call('del', KEYS[1]) end";
-                eval(commands, script, 1, key, id);
+                eval(script, 1, key, value);
             } finally {
                 localLock.unlock();
             }
@@ -136,10 +155,10 @@ public class RedisLock implements Lock {
         String script = "if (redis.call('get', KEYS[1]) == ARGV[1]) then " +
                 "redis.call('expire', KEYS[1], ARGV[2]) return 'OK' " +
                 "else return redis.call('set', KEYS[1], ARGV[1], 'EX', ARGV[2], 'NX') end";
-        return Objects.equals("OK", eval(commands, script, 1, key, id, String.valueOf(expireSeconds)));
+        return Objects.equals("OK", eval(script, 1, key, value, String.valueOf(expireSeconds)));
     }
 
-    private Object eval(JedisCommands commands, String script, int keyCount, String... params) {
+    private Object eval(String script, int keyCount, String... params) {
         if (commands instanceof ScriptingCommands) {
             return ((ScriptingCommands) commands).eval(script, keyCount, params);
         } else if (commands instanceof JedisClusterScriptingCommands) {
@@ -148,5 +167,14 @@ public class RedisLock implements Lock {
             return ((ShardedJedis) commands).getShard(key).eval(script, keyCount, params);
         }
         throw new UnsupportedOperationException();
+    }
+
+    private static String digestTextUsingMd5(String text) {
+        try {
+            return new BigInteger(1,
+                    MessageDigest.getInstance("MD5").digest(text.getBytes())).toString(16);
+        } catch (NoSuchAlgorithmException e) {
+            throw new RuntimeException(e);
+        }
     }
 }
