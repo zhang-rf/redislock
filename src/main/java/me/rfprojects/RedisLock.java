@@ -58,7 +58,7 @@ public class RedisLock implements Lock {
             throw new IllegalArgumentException();
         }
         this.minSleepMillis = approximateSleepMillis >> 1;
-        this.maxSleepMillis = approximateSleepMillis + (approximateSleepMillis >> 1);
+        this.maxSleepMillis = approximateSleepMillis + this.minSleepMillis;
     }
 
     @Override
