@@ -24,7 +24,7 @@ public class RedisLock implements Lock {
     public static final int DEFAULT_EXPIRE_SECONDS = 30;
     private static final String LOCK_PREFIX = "__lock:";
 
-    private static final String id = UUID.randomUUID().toString();
+    private static final String lockId = UUID.randomUUID().toString();
 
     private final JedisCommands commands;
     private final String key;
@@ -49,7 +49,7 @@ public class RedisLock implements Lock {
 
         this.commands = commands;
         this.key = LOCK_PREFIX + digestTextUsingMd5(name);
-        this.value = digestTextUsingMd5(key + id);
+        this.value = digestTextUsingMd5(key + lockId);
         this.expireSeconds = expireSeconds;
     }
 
